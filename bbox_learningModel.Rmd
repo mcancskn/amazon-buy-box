@@ -1,0 +1,454 @@
+---
+title: "mcano"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include = TRUE}
+
+library(dplyr)
+library(bnlearn)
+library(caret)
+library(ggplot2)
+library(tidyr)
+data <- readRDS("/Users/mustafacan/Desktop/amz_train.rds")
+head(data)
+```
+
+```{r cars, include = TRUE}
+overall_unique_products <- length(unique(data$pid))
+overall_unique_sellers <- length(unique(data$sid))
+
+overall_unique_products
+overall_unique_sellers
+
+```
+```{r pressure, include=TRUE}
+data$epoc = as.Date(data$epoc, format = "%Y-%m-%d")
+
+daily_pid <- data %>% 
+  group_by(epoc) %>% 
+  summarise(distinct_pid = n_distinct(pid), distinct_sid = n_distinct(sid))
+
+daily_pid
+```
+```{r, include = TRUE}
+
+price_stats_by_product <- data %>%
+  group_by(pid) %>%
+  summarise(
+    Average_Price = mean(price, na.rm = TRUE),
+    Max_Price = max(price, na.rm = TRUE),
+    Min_Price = min(price, na.rm = TRUE),
+    BuyBox_Price = mean(bbox_price, na.rm = TRUE),
+    Average_Shipping_Cost = mean(shipping, na.rm = TRUE)
+  )
+
+# View the first few results
+price_stats_by_product %>% print(n = 10)
+```
+```{r, include=TRUE}
+# Seller ratings
+seller_stats_by_product <- data %>%
+  group_by(pid) %>%
+  summarise(
+    Average_Seller_Rating = mean(sid_rating, na.rm = TRUE),
+    Average_Positive_Feedback = mean(sid_pos_fb, na.rm = TRUE),
+    Total_Seller_Rating_Count = sum(sid_rating_cnt, na.rm = TRUE),
+    Average_Product_Rating = mean(pid_rating, na.rm = TRUE),
+    Total_Product_Rating_Count = sum(pid_rating_cnt, na.rm = TRUE)
+  )
+
+seller_stats_by_product %>% print(n = 10)
+```
+```{r, include=TRUE}
+bbox_seller_comparison = data[(data$bbox == 'success'),]  %>% 
+  group_by(sid) %>% 
+  summarise(number = n()) %>% 
+  arrange(desc(number))
+
+bbox_seller_comparison_total = data.frame(sid = c(bbox_seller_comparison$sid[1:1], 'others'), 
+                              number = c(bbox_seller_comparison$number[1:1], 
+                                    sum(bbox_seller_comparison$number[2:length(bbox_seller_comparison$number)])))
+bbox_seller_comparison_total
+```
+```{r, include=TRUE}
+bbox_seller_comparison_product = data[(data$bbox == 'success'),]  %>% 
+  group_by(pid,sid) %>% 
+  summarise(number = n(), .groups = "drop") %>% 
+  arrange(desc(number)) %>% 
+  arrange(desc(pid))
+
+summarized_data <- bbox_seller_comparison_product %>%
+  mutate(seller_type = ifelse(sid == "amazon", "amazon", "others")) %>%
+  group_by(pid, seller_type) %>%
+  summarize(sales = sum(number), .groups = "drop") %>%
+  spread(key = seller_type, value = sales)
+
+summarized_data[is.na(summarized_data)] <- 0
+
+summarized_data
+```
+
+
+```{r}
+
+# Create the summary table
+summary_table <- data %>%
+  group_by(sid) %>%
+  summarise(
+    count = n(),
+    avg_page = mean(as.numeric(page), na.rm = TRUE),
+    avg_rank = mean(as.numeric(rank), na.rm = TRUE),
+    sum_fba = sum(as.numeric(is_fba), na.rm = TRUE),
+    sum_prime = sum(as.numeric(is_prime), na.rm = TRUE)
+  ) %>%
+  arrange(desc(count))
+
+# Display the summary table
+summary_table
+
+```
+
+```{r}
+
+# Create the summary table
+summary_table <- data %>%
+  group_by(pid) %>%
+  summarise(
+    count = n(),
+    avg_page = mean(as.numeric(page), na.rm = TRUE),
+    avg_rank = mean(as.numeric(rank), na.rm = TRUE),
+    sum_fba = sum(as.numeric(is_fba), na.rm = TRUE),
+    sum_prime = sum(as.numeric(is_prime), na.rm = TRUE)
+  ) %>%
+  arrange(desc(count))
+
+# Display the summary table
+summary_table
+```
+```{r}
+
+data$price <- as.numeric(as.character(data$price))
+data$shipping <- as.numeric(as.character(data$shipping))
+data$bbox_price <- as.numeric(as.character(data$bbox_price))
+
+# Calculate the price range ratio for each product
+price_range_ratio <- data %>%
+  group_by(pid) %>%
+  summarise(
+    max_price = max(price, na.rm = TRUE),
+    min_price = min(price, na.rm = TRUE)
+  ) %>%
+  mutate(price_range_ratio = ifelse(min_price > 0, max_price / min_price, NA)) %>%
+  select(pid, price_range_ratio) %>%
+  ungroup()
+
+# Calculate the average shipping cost to price ratio for each product
+avg_shipping_cost_to_price_ratio <- data %>%
+  group_by(pid) %>%
+  summarise(
+    avg_price = mean(price, na.rm = TRUE),
+    avg_shipping_cost = mean(shipping, na.rm = TRUE)
+  ) %>%
+  mutate(shipping_cost_to_price_ratio = avg_shipping_cost / avg_price) %>%
+  select(pid, shipping_cost_to_price_ratio) %>%
+  ungroup()
+
+
+summary_table <- merge(price_range_ratio, avg_shipping_cost_to_price_ratio, by = "pid")
+
+summary_table
+```
+```{r}
+product_seller_count <- data %>%
+  group_by(pid) %>%
+  summarise(number_of_sellers = n_distinct(sid)) %>%
+  ungroup()  # Remove grouping
+
+# View the table
+product_seller_count
+```
+```{r}
+
+buy_box_wins_by_rank <- data %>%
+  filter(bbox == "success") %>% 
+  group_by(rank) %>%
+  summarise(buy_box_wins = n()) %>%
+  ungroup()
+
+# Plot the number of buy-box wins for each ranking
+ggplot(buy_box_wins_by_rank, aes(x = rank, y = buy_box_wins)) +
+  geom_col() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8)) +
+  labs(x = "Rank", y = "Number of Buy-Box Wins", title = "Number of Buy-Box Wins by Ranking")
+```
+```{r}
+product_prices <- data %>%
+  group_by(pid) %>%
+  summarise(
+    mean_price = mean(price, na.rm = TRUE),
+    buy_box_price = mean(bbox_price, na.rm = TRUE)  # Assuming bbox_price is the buy-box price
+  ) %>%
+  ungroup()
+
+# Reshape the data for plotting
+long_format <- product_prices %>%
+  gather(key = "price_type", value = "price", mean_price, buy_box_price)
+
+# Create the plot
+ggplot(long_format, aes(x = pid, y = price, group = price_type, color = price_type)) +
+  geom_line() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  labs(x = "Product ID", y = "Price", title = "Comparison of Mean Price and Buy-Box Price for Each Product") +
+  scale_color_manual(values = c("mean_price" = "blue", "buy_box_price" = "red"))
+
+```
+
+
+```{r}
+# Plotting the count of bbox success for Prime status
+ggplot(data, aes(x = is_prime, fill = bbox)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Prime Status", y = "Percentage of Buy-Box Win", fill = "Buy-Box Status") +
+  theme_minimal() +
+  ggtitle("Buy-Box Success by Prime Status")
+
+# Plotting the count of bbox success for FBA status
+ggplot(data, aes(x = is_fba, fill = bbox)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "FBA Status", y = "Percentage of Buy-Box Win", fill = "Buy-Box Status") +
+  theme_minimal() +
+  ggtitle("Buy-Box Success by FBA Status")
+```
+```{r}
+buy_box_ratings <- data %>%
+  filter(bbox == "success") %>%
+  group_by(pid) %>%
+  summarise(mean_buy_box_rating = mean(sid_rating, na.rm = TRUE)) %>%
+  ungroup()
+
+# Calculate the overall mean sid_rating for all sellers for each product
+overall_ratings <- data %>%
+  group_by(pid) %>%
+  summarise(mean_overall_rating = mean(sid_rating, na.rm = TRUE)) %>%
+  ungroup()
+
+rating_comparison <- merge(buy_box_ratings, overall_ratings, by = "pid")
+
+
+long_format <- rating_comparison %>%
+  gather(key = "rating_type", value = "rating", mean_buy_box_rating, mean_overall_rating)
+
+
+# Plot the comparison with adjusted bar spacing
+ggplot(long_format, aes(x = pid, y = rating, fill = rating_type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  labs(x = "Product ID", y = "Rating", title = "Mean Buy-Box SID Rating vs. Mean Overall SID Rating by Product")
+```
+
+
+```{r}
+
+
+training_data <- readRDS("/Users/mustafacan/Desktop/amz_train.rds")
+
+
+
+training_data
+
+
+```
+
+```{r}
+training_data <- training_data %>%
+  mutate(is_shipping_cost = ifelse(is.na(shipping) | shipping == 0, "no", "yes")) %>% 
+  select(-shipping) # This will drop the 'shipping' column
+
+training_data
+```
+
+
+```{r}
+training_data <- training_data %>%
+  group_by(pid) %>%
+  mutate(price_quartile = ntile(price, 4)) %>%
+  ungroup() %>% # This is to remove the grouping
+  select(-price) # This will drop the 'price' column
+
+training_data
+```
+
+```{r}
+training_data <- training_data %>%
+  mutate(is_amazon = as.factor(ifelse(sid == "amazon", "amazon", "other")),
+         )
+
+training_data <- training_data %>%
+  group_by(pid) %>%
+  mutate(
+    # Create new score by multiplying the three columns
+    sid_score = sid_rating * sid_pos_fb * sid_rating_cnt,
+    # Compute quartiles within each pid group for the new score
+    sid_score_quartile = ntile(sid_score, 4)
+  ) %>%
+  ungroup()  # Ungrouping after the grouped operations are done
+
+training_data <- training_data[, -which(names(training_data) %in% c("sid","sid_rating","sid_pos_fb","sid_rating_cnt","sid_score"))]
+
+training_data
+```
+
+```{r}
+training_data <- training_data[, -which(names(training_data) %in% c("pid_rating_cnt"))]
+training_data
+```
+
+```{r}
+training_data <- training_data %>%
+  # Step 1: Factor the rank column
+  mutate(factored_rank = factor(ifelse(rank %in% 1:3, "first_three", "others"))) %>%
+  # Step 2: Combine page and rank into a string column
+  unite("page_rank", page, factored_rank, sep = "-", remove = FALSE) %>%
+  # Step 3: Remove the original page and rank columns
+  select(-page, -rank, -factored_rank,-epoc, -bbox_sid, -bbox_price)
+
+training_data
+```
+
+```{r}
+training_data <- as.data.frame(lapply(training_data, factor))
+wlist = data.frame(from = c("sid_score_quartile","price_quartile","page_rank","is_fba","is_prime"), to = c("bbox"))
+
+learned.hc<-hc(training_data, whitelist = wlist)
+graphviz.plot(learned.hc)
+```
+
+
+```{r}
+learned.tabu<-tabu(training_data, whitelist = wlist)
+graphviz.plot(learned.tabu)
+```
+
+```{r}
+all.equal(learned.hc,learned.tabu)
+```
+
+
+```{r}
+learned.gs <- gs(training_data, undirected = FALSE, whitelist = wlist)
+print(learned.gs)
+graphviz.plot(learned.gs)
+```
+
+```{r}
+learned.iamb <- iamb(training_data, undirected = FALSE, whitelist = wlist)
+print(learned.iamb)
+graphviz.plot(learned.iamb)
+```
+
+```{r}
+learned.mmpc <- mmpc(training_data, undirected = FALSE, whitelist = wlist)
+print(learned.mmpc)
+graphviz.plot(learned.mmpc)
+```
+```{r}
+learned.si.hiton.pc <- si.hiton.pc(training_data, undirected = FALSE, whitelist = wlist)
+print(learned.si.hiton.pc )
+graphviz.plot(learned.si.hiton.pc )
+```
+
+```{r}
+learned.mmhc <- mmhc(training_data, whitelist = wlist)
+print(learned.mmhc)
+graphviz.plot(learned.mmhc)
+```
+
+```{r}
+learned.rsmax2 <- rsmax2(training_data, whitelist = wlist)
+print(learned.rsmax2)
+graphviz.plot(learned.rsmax2)
+
+```
+
+```{r}
+bn.cv(training_data, bn= learned.hc, method = "hold-out")
+bn.cv(training_data, bn= learned.tabu, method = "hold-out")
+bn.cv(training_data, bn= learned.gs, method = "hold-out")
+bn.cv(training_data, bn= learned.iamb, method = "hold-out")
+bn.cv(training_data, bn= learned.mmpc, method = "hold-out")
+bn.cv(training_data, bn= learned.si.hiton.pc, method = "hold-out")
+bn.cv(training_data, bn= learned.mmhc, method = "hold-out")
+bn.cv(training_data, bn= learned.rsmax2, method = "hold-out")
+```
+
+```{r}
+fit.bayes<- bn.fit(learned.hc, training_data, method = "bayes", iss=10)
+```
+
+```{r}
+junction<-compile(as.grain(fit.bayes))
+jev = setEvidence(junction, nodes = "is_amazon", states = "amazon")
+querygrain(junction, nodes = c("bbox"))
+querygrain(jev, nodes = c("bbox"))
+```
+
+```{r}
+
+pred <- predict(fit.bayes, node = "bbox", data = training_data, method = "parents")
+confusionMatrix(pred, training_data$bbox,positive = 'success')
+```
+
+```{r}
+test_data <- readRDS("/Users/mustafacan/Downloads/amz_test_full.rds")
+
+
+
+# Create is_shipping_cost column and drop the 'shipping' column
+test_data <- test_data %>%
+  mutate(is_shipping_cost = ifelse(is.na(shipping) | shipping == 0, "no", "yes")) %>%
+  select(-shipping)
+
+test_data <- test_data %>%
+  group_by(pid) %>%
+  mutate(price_quartile = ntile(price, 4)) %>%
+  ungroup() %>%
+  select(-price)
+
+test_data <- test_data %>%
+  mutate(is_amazon = as.factor(ifelse(sid == "amazon", "amazon", "other")))
+
+test_data <- test_data %>%
+  group_by(pid) %>%
+  mutate(
+    sid_score = sid_rating * sid_pos_fb * sid_rating_cnt,
+    sid_score_quartile = ntile(sid_score, 4)
+  ) %>%
+  ungroup() %>%
+  select(-c("sid", "sid_rating", "sid_pos_fb", "sid_rating_cnt", "sid_score"))
+
+
+# Factor the rank column, combine page and rank into a string column, and remove original columns
+test_data <- test_data %>%
+  mutate(factored_rank = factor(ifelse(rank %in% 1:3, "first_three", "others"))) %>%
+  unite("page_rank", page, factored_rank, sep = "-", remove = FALSE) %>%
+  select(-c("page", "rank", "factored_rank","pid_rating_cnt","epoc"))
+
+# Convert all columns to factors
+test_data <- as.data.frame(lapply(test_data, factor))
+
+test_data
+```
+
+```{r}
+pred <- predict(fit.bayes, node = "bbox", data = test_data, method = "parents")
+
+confusionMatrix(pred, test_data$bbox,positive = 'success')
+```
+
